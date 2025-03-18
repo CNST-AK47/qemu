@@ -4655,7 +4655,7 @@ void postcopy_preempt_shutdown_file(MigrationState *s)
     qemu_put_be64(s->postcopy_qemufile_src, RAM_SAVE_FLAG_EOS);
     qemu_fflush(s->postcopy_qemufile_src);
 }
-
+// 存储vm的handlers
 static SaveVMHandlers savevm_ram_handlers = {
     .save_setup = ram_save_setup,
     .save_live_iterate = ram_save_iterate,

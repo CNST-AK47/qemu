@@ -1175,7 +1175,9 @@ static const char *const qcow_strong_runtime_opts[] = {
 
     NULL
 };
-
+/**
+ * @brief  qcow2 文件写入
+ */
 static BlockDriver bdrv_qcow = {
     .format_name	= "qcow",
     .instance_size	= sizeof(BDRVQcowState),

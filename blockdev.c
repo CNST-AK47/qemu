@@ -3045,6 +3045,7 @@ static void blockdev_mirror_common(const char *job_id, BlockDriverState *bs,
     /* pass the node name to replace to mirror start since it's loose coupling
      * and will allow to check whether the node still exist at mirror completion
      */
+    // 开始进行迁移
     mirror_start(job_id, bs, target,
                  replaces, job_flags,
                  speed, granularity, buf_size, sync, backing_mode, zero_target,
@@ -3208,7 +3209,32 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
 out:
     aio_context_release(aio_context);
 }
-
+/**
+ * @brief  qmp 指令
+ * @param  job_id           My Param doc
+ * @param  device           My Param doc
+ * @param  target           My Param doc
+ * @param  replaces         My Param doc
+ * @param  sync             My Param doc
+ * @param  has_speed        My Param doc
+ * @param  speed            My Param doc
+ * @param  has_granularity  My Param doc
+ * @param  granularity      My Param doc
+ * @param  has_buf_size     My Param doc
+ * @param  buf_size         My Param doc
+ * @param  has_on_source_errorMy Param doc
+ * @param  on_source_error  My Param doc
+ * @param  has_on_target_errorMy Param doc
+ * @param  on_target_error  My Param doc
+ * @param  filter_node_name My Param doc
+ * @param  has_copy_mode    My Param doc
+ * @param  copy_mode        My Param doc
+ * @param  has_auto_finalizeMy Param doc
+ * @param  auto_finalize    My Param doc
+ * @param  has_auto_dismiss My Param doc
+ * @param  auto_dismiss     My Param doc
+ * @param  errp             My Param doc
+ */
 void qmp_blockdev_mirror(const char *job_id,
                          const char *device, const char *target,
                          const char *replaces,
@@ -3259,7 +3285,7 @@ void qmp_blockdev_mirror(const char *job_id,
     if (ret < 0) {
         goto out;
     }
-
+    // 进行common函数进行任务执行
     blockdev_mirror_common(job_id, bs, target_bs,
                            replaces, sync, backing_mode,
                            zero_target, has_speed, speed,
@@ -3295,7 +3321,12 @@ static BlockJob *find_block_job_locked(const char *id, Error **errp)
 
     return job;
 }
-
+/**
+ * @brief  设置任务speed
+ * @param  device           设置任务speed
+ * @param  speed            speed
+ * @param  errp             My Param doc
+ */
 void qmp_block_job_set_speed(const char *device, int64_t speed, Error **errp)
 {
     BlockJob *job;

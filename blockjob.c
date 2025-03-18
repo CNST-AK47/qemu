@@ -279,6 +279,7 @@ static bool job_timer_pending(Job *job)
 
 bool block_job_set_speed_locked(BlockJob *job, int64_t speed, Error **errp)
 {
+    // 获取对应的driver 
     const BlockJobDriver *drv = block_job_driver(job);
     int64_t old_speed = job->speed;
 
@@ -292,11 +293,11 @@ bool block_job_set_speed_locked(BlockJob *job, int64_t speed, Error **errp)
                    "a non-negative value");
         return false;
     }
-
+    // 设置speed
     ratelimit_set_speed(&job->limit, speed, BLOCK_JOB_SLICE_TIME);
 
     job->speed = speed;
-
+    // 调用driver设置速度
     if (drv->set_speed) {
         job_unlock();
         drv->set_speed(job, speed);
@@ -318,7 +319,12 @@ static bool block_job_set_speed(BlockJob *job, int64_t speed, Error **errp)
     JOB_LOCK_GUARD();
     return block_job_set_speed_locked(job, speed, errp);
 }
-
+/**
+ * @brief  查询任务主动限制的延迟
+ * @param  job              当前job
+ * @param  n                对应的
+ * @return int64_t 
+ */
 int64_t block_job_ratelimit_get_delay(BlockJob *job, uint64_t n)
 {
     IO_CODE();
@@ -449,7 +455,21 @@ static void block_job_event_ready_locked(Notifier *n, void *opaque)
                                     job->speed);
 }
 
-
+/**
+ * @brief  
+ * @param  job_id           My Param doc
+ * @param  driver           对应的驱动
+ * @param  txn              My Param doc
+ * @param  bs               My Param doc
+ * @param  perm             My Param doc
+ * @param  shared_perm      My Param doc
+ * @param  speed            对应执行限速
+ * @param  flags            My Param doc
+ * @param  cb               My Param doc
+ * @param  opaque           My Param doc
+ * @param  errp             My Param doc
+ * @return void* 
+ */
 void *block_job_create(const char *job_id, const BlockJobDriver *driver,
                        JobTxn *txn, BlockDriverState *bs, uint64_t perm,
                        uint64_t shared_perm, int64_t speed, int flags,
@@ -462,7 +482,7 @@ void *block_job_create(const char *job_id, const BlockJobDriver *driver,
     if (job_id == NULL && !(flags & JOB_INTERNAL)) {
         job_id = bdrv_get_device_name(bs);
     }
-
+    // 创建对应任务
     job = job_create(job_id, &driver->job_driver, txn, bdrv_get_aio_context(bs),
                      flags, cb, opaque, errp);
     if (job == NULL) {
@@ -472,7 +492,7 @@ void *block_job_create(const char *job_id, const BlockJobDriver *driver,
     assert(is_block_job(&job->job));
     assert(job->job.driver->free == &block_job_free);
     assert(job->job.driver->user_resume == &block_job_user_resume);
-
+    // 初始化限制器
     ratelimit_init(&job->limit);
 
     job->finalize_cancelled_notifier.notify = block_job_event_cancelled_locked;
@@ -500,7 +520,7 @@ void *block_job_create(const char *job_id, const BlockJobDriver *driver,
     }
 
     bdrv_op_unblock(bs, BLOCK_OP_TYPE_DATAPLANE, job->blocker);
-
+    // 设置限速
     if (!block_job_set_speed(job, speed, errp)) {
         goto fail;
     }

@@ -1033,7 +1033,16 @@ out:
 
     return ret;
 }
-
+/**
+ * @brief  调用对应驱动，执行数据写入
+ * @param  bs               My Param doc
+ * @param  offset           My Param doc
+ * @param  bytes            My Param doc
+ * @param  qiov             My Param doc
+ * @param  qiov_offset      My Param doc
+ * @param  flags            My Param doc
+ * @return int 
+ */
 static int coroutine_fn GRAPH_RDLOCK
 bdrv_driver_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
                     QEMUIOVector *qiov, size_t qiov_offset,
@@ -1102,6 +1111,7 @@ bdrv_driver_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
     assert(bytes <= BDRV_REQUEST_MAX_BYTES);
 
     assert(drv->bdrv_co_writev);
+    // 调用驱动进行数据写入
     ret = drv->bdrv_co_writev(bs, sector_num, nb_sectors, qiov, flags);
 
 emulate_flags:
@@ -1898,6 +1908,9 @@ bdrv_co_write_req_finish(BdrvChild *child, int64_t offset, int64_t bytes,
  * Forwards an already correctly aligned write request to the BlockDriver,
  * after possibly fragmenting it.
  */
+/**
+ * 执行数据写入
+ */
 static int coroutine_fn GRAPH_RDLOCK
 bdrv_aligned_pwritev(BdrvChild *child, BdrvTrackedRequest *req,
                      int64_t offset, int64_t bytes, int64_t align,
@@ -1965,7 +1978,7 @@ bdrv_aligned_pwritev(BdrvChild *child, BdrvTrackedRequest *req,
                  * need to flush on the last iteration */
                 local_flags &= ~BDRV_REQ_FUA;
             }
-
+            // 调用驱动进行数据写入
             ret = bdrv_driver_pwritev(bs, offset + bytes - bytes_remaining,
                                       num, qiov,
                                       qiov_offset + bytes - bytes_remaining,
@@ -2063,7 +2076,16 @@ int coroutine_fn bdrv_co_pwritev(BdrvChild *child,
     IO_CODE();
     return bdrv_co_pwritev_part(child, offset, bytes, qiov, 0, flags);
 }
-
+/**
+ * @brief 后端
+ * @param  child            子线程
+ * @param  offset           偏移量
+ * @param  bytes            My Param doc
+ * @param  qiov             My Param doc
+ * @param  qiov_offset      My Param doc
+ * @param  flags            My Param doc
+ * @return int 
+ */
 int coroutine_fn bdrv_co_pwritev_part(BdrvChild *child,
     int64_t offset, int64_t bytes, QEMUIOVector *qiov, size_t qiov_offset,
     BdrvRequestFlags flags)
@@ -2143,7 +2165,7 @@ int coroutine_fn bdrv_co_pwritev_part(BdrvChild *child,
         bdrv_make_request_serialising(&req, align);
         bdrv_padding_rmw_read(child, &req, &pad, false);
     }
-
+    // 进行数据写入
     ret = bdrv_aligned_pwritev(child, &req, offset, bytes, align,
                                qiov, qiov_offset, flags);
 

@@ -1368,6 +1368,7 @@ blk_co_do_pwritev_part(BlockBackend *blk, int64_t offset, int64_t bytes,
 
     /* Call blk_bs() only after waiting, the graph may have changed */
     bs = blk_bs(blk);
+    // 追踪块写入
     trace_blk_co_pwritev(blk, bs, offset, bytes, flags);
 
     ret = blk_check_byte_request(blk, offset, bytes);
@@ -1385,9 +1386,10 @@ blk_co_do_pwritev_part(BlockBackend *blk, int64_t offset, int64_t bytes,
     if (!blk->enable_write_cache) {
         flags |= BDRV_REQ_FUA;
     }
-
+    // 执行块写入
     ret = bdrv_co_pwritev_part(blk->root, offset, bytes, qiov, qiov_offset,
                                flags);
+    // 设置执行块写入                    
     bdrv_dec_in_flight(bs);
     return ret;
 }
@@ -1399,8 +1401,9 @@ int coroutine_fn blk_co_pwritev_part(BlockBackend *blk, int64_t offset,
 {
     int ret;
     IO_OR_GS_CODE();
-
+    // 增加blk数据写入量
     blk_inc_in_flight(blk);
+    // 执行数据写入
     ret = blk_co_do_pwritev_part(blk, offset, bytes, qiov, qiov_offset, flags);
     blk_dec_in_flight(blk);
 
@@ -1417,7 +1420,15 @@ int coroutine_fn blk_co_pwrite(BlockBackend *blk, int64_t offset, int64_t bytes,
 
     return blk_co_pwritev(blk, offset, bytes, &qiov, flags);
 }
-
+/**
+ * @brief  使用协程，写入对应的blk数据
+ * @param  blk              对应后端blk块
+ * @param  offset           My Param doc
+ * @param  bytes            My Param doc
+ * @param  qiov             My Param doc
+ * @param  flags            My Param doc
+ * @return int 
+ */
 int coroutine_fn blk_co_pwritev(BlockBackend *blk, int64_t offset,
                                 int64_t bytes, QEMUIOVector *qiov,
                                 BdrvRequestFlags flags)

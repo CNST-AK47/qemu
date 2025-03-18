@@ -39,6 +39,7 @@ typedef struct MirrorBuffer {
 typedef struct MirrorOp MirrorOp;
 
 typedef struct MirrorBlockJob {
+    // 公共字段
     BlockJob common;
     BlockBackend *target;
     BlockDriverState *mirror_top_bs;
@@ -184,7 +185,11 @@ static void coroutine_fn mirror_wait_on_conflicts(MirrorOp *self,
         }
     }
 }
-
+/**
+ * @brief  迭代完成，主要是更新脏页和清除buffer
+ * @param  op               My Param doc
+ * @param  ret              My Param doc
+ */
 static void coroutine_fn mirror_iteration_done(MirrorOp *op, int ret)
 {
     MirrorBlockJob *s = op->s;
@@ -216,12 +221,17 @@ static void coroutine_fn mirror_iteration_done(MirrorOp *op, int ret)
             job_progress_update(&s->common.job, op->bytes);
         }
     }
+    // 销毁iovec
     qemu_iovec_destroy(&op->qiov);
-
+    // 唤醒等待协程
     qemu_co_queue_restart_all(&op->waiting_requests);
     g_free(op);
 }
-
+/**
+ * @brief  设置写入完成
+ * @param  op               My Param doc
+ * @param  ret              My Param doc
+ */
 static void coroutine_fn mirror_write_complete(MirrorOp *op, int ret)
 {
     MirrorBlockJob *s = op->s;
@@ -235,14 +245,14 @@ static void coroutine_fn mirror_write_complete(MirrorOp *op, int ret)
             s->ret = ret;
         }
     }
-
+    // 记录本地迭代结束
     mirror_iteration_done(op, ret);
 }
 
 static void coroutine_fn mirror_read_complete(MirrorOp *op, int ret)
 {
     MirrorBlockJob *s = op->s;
-
+    // 获取对应脏页
     if (ret < 0) {
         BlockErrorAction action;
 
@@ -255,8 +265,9 @@ static void coroutine_fn mirror_read_complete(MirrorOp *op, int ret)
         mirror_iteration_done(op, ret);
         return;
     }
-
+    // 将数据写入到目标端
     ret = blk_co_pwritev(s->target, op->offset, op->qiov.size, &op->qiov, 0);
+    // 设置写入完成
     mirror_write_complete(op, ret);
 }
 
@@ -338,6 +349,7 @@ mirror_wait_for_free_in_flight_slot(MirrorBlockJob *s)
 static void coroutine_fn mirror_co_read(void *opaque)
 {
     MirrorOp *op = opaque;
+    // 获取对应block 任务
     MirrorBlockJob *s = op->s;
     int nb_chunks;
     uint64_t ret;
@@ -364,7 +376,7 @@ static void coroutine_fn mirror_co_read(void *opaque)
     /* The range is sector-aligned, since bdrv_getlength() rounds up. */
     assert(QEMU_IS_ALIGNED(op->bytes, BDRV_SECTOR_SIZE));
     nb_chunks = DIV_ROUND_UP(op->bytes, s->granularity);
-
+    // buffer 空间不足，需要等待写入完成
     while (s->buf_free_count < nb_chunks) {
         trace_mirror_yield_in_flight(s, op->offset, s->in_flight);
         mirror_wait_for_free_in_flight_slot(s);
@@ -373,13 +385,17 @@ static void coroutine_fn mirror_co_read(void *opaque)
     /* Now make a QEMUIOVector taking enough granularity-sized chunks
      * from s->buf_free.
      */
+    // 初始化qemu iovector 用于快速复制
+    // @see: https://blog.csdn.net/huang987246510/article/details/93139257
     qemu_iovec_init(&op->qiov, nb_chunks);
     while (nb_chunks-- > 0) {
         MirrorBuffer *buf = QSIMPLEQ_FIRST(&s->buf_free);
+        // 计算剩余的量
         size_t remaining = op->bytes - op->qiov.size;
 
         QSIMPLEQ_REMOVE_HEAD(&s->buf_free, next);
         s->buf_free_count--;
+        // 将数据写入到buffer 中
         qemu_iovec_add(&op->qiov, buf, MIN(s->granularity, remaining));
     }
 
@@ -387,12 +403,15 @@ static void coroutine_fn mirror_co_read(void *opaque)
     s->in_flight++;
     s->bytes_in_flight += op->bytes;
     op->is_in_flight = true;
+    // 拷贝脏页存在
     trace_mirror_one_iteration(s, op->offset, op->bytes);
 
     WITH_GRAPH_RDLOCK_GUARD() {
+        // 从源设备进行数据读取--将其放入到buf中
         ret = bdrv_co_preadv(s->mirror_top_bs->backing, op->offset, op->bytes,
                              &op->qiov, 0);
     }
+    // 完成对端写入
     mirror_read_complete(op, ret);
 }
 
@@ -424,7 +443,14 @@ static void coroutine_fn mirror_co_discard(void *opaque)
     ret = blk_co_pdiscard(op->s->target, op->offset, op->bytes);
     mirror_write_complete(op, ret);
 }
-
+/**
+ * @brief  进行数据迁移复制
+ * @param  s                block job
+ * @param  offset           块数据偏移
+ * @param  bytes            计算复制字节数
+ * @param  mirror_method    My Param doc
+ * @return unsigned 
+ */
 static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
                                unsigned bytes, MirrorMethod mirror_method)
 {
@@ -440,7 +466,7 @@ static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
         .bytes_handled  = &bytes_handled,
     };
     qemu_co_queue_init(&op->waiting_requests);
-
+    // 创建对应协程
     switch (mirror_method) {
     case MIRROR_METHOD_COPY:
         co = qemu_coroutine_create(mirror_co_read, op);
@@ -457,6 +483,7 @@ static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
     op->co = co;
 
     QTAILQ_INSERT_TAIL(&s->ops_in_flight, op, next);
+    // 执行协程
     qemu_coroutine_enter(co);
     /* At this point, ownership of op has been moved to the coroutine
      * and the object may already be freed */
@@ -470,7 +497,11 @@ static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
     assert(bytes_handled <= UINT_MAX);
     return bytes_handled;
 }
-
+/**
+ * @brief  核心的mirror 数据复制函数
+ * @param  s                进行数据复制
+ * @return uint64_t 
+ */
 static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
 {
     BlockDriverState *source = s->mirror_top_bs->backing->bs;
@@ -481,8 +512,9 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
     int nb_chunks = 1;
     bool write_zeroes_ok = bdrv_can_write_zeroes_with_unmap(blk_bs(s->target));
     int max_io_bytes = MAX(s->buf_size / MAX_IN_FLIGHT, MAX_IO_BYTES);
-
+    // 加锁
     bdrv_dirty_bitmap_lock(s->dirty_bitmap);
+    // 获取下一个脏页偏移量
     offset = bdrv_dirty_iter_next(s->dbi);
     if (offset < 0) {
         bdrv_set_dirty_iter(s->dbi, 0);
@@ -499,12 +531,14 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
      * copy something, so wait until there are at least no more requests to the
      * very beginning of the area.
      */
+    // 等待当前偏移量冲突的并发请求完成
     mirror_wait_on_conflicts(NULL, s, offset, 1);
-
+    // 检查任务是否被暂停或者取消
     job_pause_point(&s->common.job);
 
     /* Find the number of consective dirty chunks following the first dirty
      * one, and wait for in flight requests in them. */
+    // 查找连续的脏块
     bdrv_dirty_bitmap_lock(s->dirty_bitmap);
     while (nb_chunks * s->granularity < s->buf_size) {
         int64_t next_dirty;
@@ -532,6 +566,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
      * calling bdrv_block_status_above could yield - if some blocks are
      * marked dirty in this window, we need to know.
      */
+    // 清除脏页位图中的脏标记
     bdrv_reset_dirty_bitmap_locked(s->dirty_bitmap, offset,
                                    nb_chunks * s->granularity);
     bdrv_dirty_bitmap_unlock(s->dirty_bitmap);
@@ -542,6 +577,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
      * for now we just create a pseudo operation that will wake up all
      * conflicting requests once all real operations have been
      * launched. */
+    // 创建一个伪操作，用于协调并发请求
     pseudo_op = g_new(MirrorOp, 1);
     *pseudo_op = (MirrorOp){
         .offset         = offset,
@@ -550,8 +586,9 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
     };
     qemu_co_queue_init(&pseudo_op->waiting_requests);
     QTAILQ_INSERT_TAIL(&s->ops_in_flight, pseudo_op, next);
-
+    // 标记这些块为正在处理
     bitmap_set(s->in_flight_bitmap, offset / s->granularity, nb_chunks);
+    // 处理每一个脏块
     while (nb_chunks > 0 && offset < s->bdev_length) {
         int ret;
         int64_t io_bytes;
@@ -559,6 +596,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         MirrorMethod mirror_method = MIRROR_METHOD_COPY;
 
         assert(!(offset % s->granularity));
+        // 获取当前块状态
         WITH_GRAPH_RDLOCK_GUARD() {
             ret = bdrv_block_status_above(source, NULL, offset,
                                         nb_chunks * s->granularity,
@@ -585,7 +623,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
                                     MIRROR_METHOD_DISCARD;
             }
         }
-
+        // 等待空闲的IO曹
         while (s->in_flight >= MAX_IN_FLIGHT) {
             trace_mirror_yield_in_flight(s, offset, s->in_flight);
             mirror_wait_for_free_in_flight_slot(s);
@@ -595,8 +633,10 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
             ret = 0;
             goto fail;
         }
-
+        // 裁剪IO大小并执行复制操作
+        // 获取数据复制上限
         io_bytes = mirror_clip_bytes(s, offset, io_bytes);
+        // 执行数据执行数据复制，返回复制的数据长度
         io_bytes = mirror_perform(s, offset, io_bytes, mirror_method);
         if (mirror_method != MIRROR_METHOD_COPY && write_zeroes_ok) {
             io_bytes_acct = 0;
@@ -606,6 +646,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         assert(io_bytes);
         offset += io_bytes;
         nb_chunks -= DIV_ROUND_UP(io_bytes, s->granularity);
+        // 获取延迟--主要是根据设置的speed 获取对应的设延迟锁
         delay_ns = block_job_ratelimit_get_delay(&s->common, io_bytes_acct);
     }
 
@@ -896,7 +937,12 @@ static int mirror_flush(MirrorBlockJob *s)
     }
     return ret;
 }
-
+/**
+ * @brief  核心的磁盘迁移函数
+ * @param  job              My Param doc
+ * @param  errp             My Param doc
+ * @return int 
+ */
 static int coroutine_fn mirror_run(Job *job, Error **errp)
 {
     MirrorBlockJob *s = container_of(job, MirrorBlockJob, common.job);
@@ -934,6 +980,7 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
     /* Active commit must resize the base image if its size differs from the
      * active layer. */
     if (s->base == blk_bs(s->target)) {
+        // 进行文件块增长
         if (s->bdev_length > target_length) {
             ret = blk_co_truncate(s->target, s->bdev_length, false,
                                   PREALLOC_MODE_OFF, 0, NULL);
@@ -958,12 +1005,14 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
     }
 
     length = DIV_ROUND_UP(s->bdev_length, s->granularity);
+    // 初始化脏页map
     s->in_flight_bitmap = bitmap_new(length);
 
     /* If we have no backing file yet in the destination, we cannot let
      * the destination do COW.  Instead, we copy sectors around the
      * dirty data if needed.  We need a bitmap to do that.
      */
+    // 获取后端块设备名称
     bdrv_get_backing_filename(target_bs, backing_filename,
                               sizeof(backing_filename));
     if (!bdrv_co_get_info(target_bs, &bdi) && bdi.cluster_size) {
@@ -1002,7 +1051,9 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
 
     assert(!s->dbi);
     s->dbi = bdrv_dirty_iter_new(s->dirty_bitmap);
+    // 进入主题循环
     for (;;) {
+        // 需要延迟的ns 数量
         uint64_t delay_ns = 0;
         int64_t cnt, delta;
         bool should_complete;
@@ -1018,11 +1069,12 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
             ret = 0;
             goto immediate_exit;
         }
-
+        // 查询当前脏页
         cnt = bdrv_get_dirty_count(s->dirty_bitmap);
         /* cnt is the number of dirty bytes remaining and s->bytes_in_flight is
          * the number of bytes currently being processed; together those are
          * the current remaining operation length */
+        // 设置剩余参数
         job_progress_set_remaining(&s->common.job,
                                    s->bytes_in_flight + cnt +
                                    s->active_write_bytes_in_flight);
@@ -1031,26 +1083,31 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
          * periodically with no pending I/O so that bdrv_drain_all() returns.
          * We do so every BLKOCK_JOB_SLICE_TIME nanoseconds, or when there is
          * an error, or when the source is clean, whichever comes first. */
+        // 计算时间差
         delta = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - s->last_pause_ns;
         WITH_JOB_LOCK_GUARD() {
             iostatus = s->common.iostatus;
         }
+        // 根据时间差和 I/O 状态决定是否等待
         if (delta < BLOCK_JOB_SLICE_TIME &&
             iostatus == BLOCK_DEVICE_IO_STATUS_OK) {
             if (s->in_flight >= MAX_IN_FLIGHT || s->buf_free_count == 0 ||
                 (cnt == 0 && s->in_flight > 0)) {
+                    // 进行线程切出
                 trace_mirror_yield(s, cnt, s->buf_free_count, s->in_flight);
                 mirror_wait_for_free_in_flight_slot(s);
                 continue;
             } else if (cnt != 0) {
+                // 调用iteration 进行数据复制
                 delay_ns = mirror_iteration(s);
             }
         }
-
+        // 检查任务是否应该完成
         should_complete = false;
         if (s->in_flight == 0 && cnt == 0) {
             trace_mirror_before_flush(s);
             if (!job_is_ready(&s->common.job)) {
+                // 刷新磁盘
                 if (mirror_flush(s) < 0) {
                     /* Go check s->ret.  */
                     continue;
@@ -1070,7 +1127,7 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
                 job_cancel_requested(&s->common.job);
             cnt = bdrv_get_dirty_count(s->dirty_bitmap);
         }
-
+        // 如果任务完成，退出循环
         if (cnt == 0 && should_complete) {
             /* The dirty bitmap is not updated while operations are pending.
              * If we're about to exit, wait for pending operations before
@@ -1104,14 +1161,17 @@ static int coroutine_fn mirror_run(Job *job, Error **errp)
             need_drain = false;
             break;
         }
-
+        // 根据任务状态决定是否等待
         if (job_is_ready(&s->common.job) && !should_complete) {
+            // 计算等待时间
             delay_ns = (s->in_flight == 0 &&
                         cnt == 0 ? BLOCK_JOB_SLICE_TIME : 0);
         }
         trace_mirror_before_sleep(s, cnt, job_is_ready(&s->common.job),
                                   delay_ns);
+        // 等待时间以控制速率
         job_sleep_ns(&s->common.job, delay_ns);
+        // 更新最新事件
         s->last_pause_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     }
 
@@ -1230,7 +1290,9 @@ static bool commit_active_cancel(Job *job, bool force)
     /* Same as above in mirror_cancel() */
     return force || !job_is_ready(job);
 }
-
+/**
+ * @brief 创建对应的driver
+ */
 static const BlockJobDriver mirror_job_driver = {
     .job_driver = {
         .instance_size          = sizeof(MirrorBlockJob),
@@ -1633,7 +1695,33 @@ static BlockDriver bdrv_mirror_top = {
     .is_filter                  = true,
     .filtered_child_is_backing  = true,
 };
-
+/**
+ * @brief  
+ * @param  job_id           My Param doc
+ * @param  bs               My Param doc
+ * @param  creation_flags   My Param doc
+ * @param  target           My Param doc
+ * @param  replaces         My Param doc
+ * @param  speed            My Param doc
+ * @param  granularity      My Param doc
+ * @param  buf_size         My Param doc
+ * @param  backing_mode     My Param doc
+ * @param  zero_target      My Param doc
+ * @param  on_source_error  My Param doc
+ * @param  on_target_error  My Param doc
+ * @param  unmap            My Param doc
+ * @param  cb               My Param doc
+ * @param  opaque           My Param doc
+ * @param  driver           对应的驱动driver 
+ * @param  is_none_mode     My Param doc
+ * @param  base             My Param doc
+ * @param  auto_complete    My Param doc
+ * @param  filter_node_name My Param doc
+ * @param  is_mirror        My Param doc
+ * @param  copy_mode        My Param doc
+ * @param  errp             My Param doc
+ * @return BlockJob* 
+ */
 static BlockJob *mirror_start_job(
                              const char *job_id, BlockDriverState *bs,
                              int creation_flags, BlockDriverState *target,
@@ -1715,6 +1803,7 @@ static BlockJob *mirror_start_job(
     }
 
     /* Make sure that the source is not resized while the job is running */
+    // 创建任务
     s = block_job_create(job_id, driver, NULL, mirror_top_bs,
                          BLK_PERM_CONSISTENT_READ,
                          BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED |
@@ -1805,7 +1894,7 @@ static BlockJob *mirror_start_job(
     if (auto_complete) {
         s->should_complete = true;
     }
-
+    // 设置脏页map
     s->dirty_bitmap = bdrv_create_dirty_bitmap(bs, granularity, NULL, errp);
     if (!s->dirty_bitmap) {
         goto fail;
@@ -1875,6 +1964,7 @@ static BlockJob *mirror_start_job(
     QTAILQ_INIT(&s->ops_in_flight);
 
     trace_mirror_start(bs, s, opaque);
+    // 开始对应任务
     job_start(&s->common.job);
 
     return &s->common;
@@ -1903,7 +1993,26 @@ fail:
 
     return NULL;
 }
-
+/**
+ * @brief  开始进行迁移
+ * @param  job_id           My Param doc
+ * @param  bs               My Param doc
+ * @param  target           My Param doc
+ * @param  replaces         My Param doc
+ * @param  creation_flags   My Param doc
+ * @param  speed            My Param doc
+ * @param  granularity      My Param doc
+ * @param  buf_size         My Param doc
+ * @param  mode             My Param doc
+ * @param  backing_mode     My Param doc
+ * @param  zero_target      My Param doc
+ * @param  on_source_error  My Param doc
+ * @param  on_target_error  My Param doc
+ * @param  unmap            My Param doc
+ * @param  filter_node_name My Param doc
+ * @param  copy_mode        My Param doc
+ * @param  errp             My Param doc
+ */
 void mirror_start(const char *job_id, BlockDriverState *bs,
                   BlockDriverState *target, const char *replaces,
                   int creation_flags, int64_t speed,
@@ -1928,6 +2037,7 @@ void mirror_start(const char *job_id, BlockDriverState *bs,
     }
     is_none_mode = mode == MIRROR_SYNC_MODE_NONE;
     base = mode == MIRROR_SYNC_MODE_TOP ? bdrv_backing_chain_next(bs) : NULL;
+    // 开始任务
     mirror_start_job(job_id, bs, creation_flags, target, replaces,
                      speed, granularity, buf_size, backing_mode, zero_target,
                      on_source_error, on_target_error, unmap, NULL, NULL,

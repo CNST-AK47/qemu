@@ -1170,7 +1170,13 @@ static int coroutine_fn nbd_co_receive_blockstatus_reply(BDRVNBDState *s,
     *request_ret = iter.request_ret;
     return iter.ret;
 }
-
+/**
+ * @brief  发送nbd数据块
+ * @param  bs               发送对应的nbd数据块
+ * @param  request          My Param doc
+ * @param  write_qiov       My Param doc
+ * @return int 
+ */
 static int coroutine_fn nbd_co_request(BlockDriverState *bs, NBDRequest *request,
                                        QEMUIOVector *write_qiov)
 {
@@ -1265,7 +1271,15 @@ static int coroutine_fn nbd_client_co_preadv(BlockDriverState *bs, int64_t offse
 
     return ret ? ret : request_ret;
 }
-
+/**
+ * @brief  调用nbd进行数据写入
+ * @param  bs               My Param doc
+ * @param  offset           My Param doc
+ * @param  bytes            My Param doc
+ * @param  qiov             My Param doc
+ * @param  flags            My Param doc
+ * @return int 
+ */
 static int coroutine_fn nbd_client_co_pwritev(BlockDriverState *bs, int64_t offset,
                                               int64_t bytes, QEMUIOVector *qiov,
                                               BdrvRequestFlags flags)
@@ -1288,6 +1302,7 @@ static int coroutine_fn nbd_client_co_pwritev(BlockDriverState *bs, int64_t offs
     if (!bytes) {
         return 0;
     }
+    // 执行nbd数据写入
     return nbd_co_request(bs, &request, qiov);
 }
 

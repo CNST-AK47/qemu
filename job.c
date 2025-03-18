@@ -408,6 +408,7 @@ void *job_create(const char *job_id, const JobDriver *driver, JobTxn *txn,
     }
 
     job = g_malloc0(driver->instance_size);
+    // 进行driver 指定
     job->driver        = driver;
     job->id            = g_strdup(job_id);
     job->refcnt        = 1;
@@ -1134,12 +1135,14 @@ void job_start(Job *job)
     WITH_JOB_LOCK_GUARD() {
         assert(job && !job_started_locked(job) && job->paused &&
             job->driver && job->driver->run);
+        // 创建协程
         job->co = qemu_coroutine_create(job_co_entry, job);
         job->pause_count--;
         job->busy = true;
         job->paused = false;
         job_state_transition_locked(job, JOB_STATUS_RUNNING);
     }
+    // 进入协程运行
     aio_co_enter(job->aio_context, job->co);
 }
 

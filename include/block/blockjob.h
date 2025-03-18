@@ -29,7 +29,7 @@
 #include "qapi/qapi-types-block-core.h"
 #include "qemu/job.h"
 #include "qemu/ratelimit.h"
-
+// job时间片，这里为100ms
 #define BLOCK_JOB_SLICE_TIME 100000000ULL /* ns */
 
 typedef struct BlockJobDriver BlockJobDriver;

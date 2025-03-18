@@ -2328,7 +2328,16 @@ static int coroutine_fn GRAPH_RDLOCK qcow2_co_preadv_task_entry(AioTask *task)
                                 t->host_offset, t->offset, t->bytes,
                                 t->qiov, t->qiov_offset);
 }
-
+/**
+ * @brief  读取对应数据
+ * @param  bs               My Param doc
+ * @param  offset           My Param doc
+ * @param  bytes            My Param doc
+ * @param  qiov             My Param doc
+ * @param  qiov_offset      My Param doc
+ * @param  flags            My Param doc
+ * @return int 
+ */
 static int coroutine_fn GRAPH_RDLOCK
 qcow2_co_preadv_part(BlockDriverState *bs, int64_t offset, int64_t bytes,
                      QEMUIOVector *qiov, size_t qiov_offset,
@@ -6055,7 +6064,9 @@ static const char *const qcow2_strong_runtime_opts[] = {
 
     NULL
 };
-
+/**
+ * @brief qcow2 驱动
+ */
 BlockDriver bdrv_qcow2 = {
     .format_name        = "qcow2",
     .instance_size      = sizeof(BDRVQcow2State),
